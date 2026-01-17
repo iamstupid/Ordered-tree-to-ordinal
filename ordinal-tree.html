@@ -1,0 +1,1367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>序数树 · Ordinal Trees</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script>
+    // ============================================
+    // VebleNum.js - 序数运算库（内联版本）
+    // ============================================
+    "use strict";
+
+class VNClass {
+	setType(type) {
+		Object.setPrototypeOf(this, type.prototype);
+	}
+
+	static MAX_TERMS = 200;
+
+	static clone(input) {
+		if (input instanceof VNClass) return input.clone();
+		if (input instanceof Array) {
+			let c = [];
+			for (let i in input) {
+				if (i == "clone") continue;
+				c[i] = input[i] instanceof Object ? VNClass.clone(input[i]) : input[i];
+			}
+			return c;
+		}
+		if (input instanceof Object) {
+			let c = {};
+			for (let i in input) {
+				if (i == "clone") continue;
+				c[i] = input[i] instanceof Object ? VNClass.clone(input[i]) : input[i];
+			}
+			return c;
+		}
+	}
+
+	clone() {
+		let obj = new CloneTemplate();
+		for (let i in this) {
+			if (this[i] instanceof Object) obj[i] = VNClass.clone(this[i]);
+			else obj[i] = this[i];
+		}
+		obj.setType(this.__proto__.constructor);
+		if (!obj instanceof Atom) obj.standardize();
+		return obj;
+	}
+
+	add(other) {
+		return new Sum(this, other);
+	}
+
+	isEpsilon() {
+		return this instanceof Phi && this.args.length >= 2;
+	}
+
+	static add(a, b) {
+		if (!(a instanceof VNClass)) {
+			if (typeof a == "number") a = new Atom(a);
+			else a = new VebleNum(a);
+		}
+		if (!(b instanceof VNClass)) {
+			if (typeof b == "number") b = new Atom(b);
+			else b = new VebleNum(b);
+		}
+		return a.add(b);
+	}
+	static mul(a, b) {
+		if (!(a instanceof VNClass)) {
+			if (typeof a == "number") a = new Atom(a);
+			else a = new VebleNum(a);
+		}
+		if (!(b instanceof VNClass)) {
+			if (typeof b == "number") b = new Atom(b);
+			else b = new VebleNum(b);
+		}
+		return a.mul(b);
+	}
+	static pow(a, b) {
+		if (!(a instanceof VNClass)) {
+			if (typeof a == "number") a = new Atom(a);
+			else a = new VebleNum(a);
+		}
+		if (!(b instanceof VNClass)) {
+			if (typeof b == "number") b = new Atom(b);
+			else b = new VebleNum(b);
+		}
+		return a.pow(b);
+	}
+
+	static cmp(a, b) {
+		if (!(a instanceof VNClass)) {
+			if (typeof a == "number") a = new Atom(a);
+			else a = new VebleNum(a);
+		}
+		return a.cmp(b);
+	}
+
+	gt(other) { return this.cmp(other) == 1; }
+	lt(other) { return this.cmp(other) == -1; }
+	gte(other) { return this.cmp(other) > -1; }
+	lte(other) { return this.cmp(other) > 1; }
+	eq(other) { return this.cmp(other) == 0; }
+	neq(other) { return this.cmp(other) !== 0; }
+}
+
+class CloneTemplate extends VNClass {}
+
+class Atom extends VNClass {
+	constructor(value) {
+		super();
+		this.value = value.value !== undefined ? value.value : value;
+	}
+
+	add(other) {
+		if (typeof other == "number") return new Atom(this.value + other);
+		if (other instanceof Atom) return new Atom(this.value + other.value);
+		return other;
+	}
+
+	mul(other) {
+		if (typeof other == "number") return new Atom(this.value * other);
+		if (other instanceof Atom) return new Atom(this.value * other.value);
+		if (this.value == 1) return other.clone();
+		if (this.value == 0) return new Atom(0);
+		return other.clone();
+	}
+
+	pow(other) {
+		if (other instanceof Sum) {
+			let p = new Atom(1);
+			for (let i of other.addends) p = p.mul(this.pow(i));
+			return p;
+		}
+		if (other instanceof Product) return this.pow(other.ord).pow(other.mult);
+		if (other instanceof Phi && other.args.length == 1 && new Atom(1).cmp(other.args[0]) == -1) {
+			if (new Phi(1).cmp(other.args[0]) < 1) return new Phi(other.clone());
+			let o = other.clone();
+			if (o.args[0] instanceof Atom) o.args[0] = o.args[0].value;
+			o.args[0]--;
+			return new Phi(o);
+		}
+		if (typeof other == "number") return new Atom(this.value ** other);
+		if (other instanceof Atom) return new Atom(this.value ** other.value);
+		if (this.value == 1) return new Atom(1);
+		if (this.value == 0) return new Atom(0);
+		return other.clone();
+	}
+
+	cmp(other) {
+		if (typeof other == "number") return this.value > other ? 1 : this.value < other ? -1 : 0;
+		if (other instanceof Atom) return this.value > other.value ? 1 : this.value < other.value ? -1 : 0;
+		return -1;
+	}
+
+	toString() { return this.value.toString(); }
+	toMixed() { return this.value.toString(); }
+	toHTML() { return this.value.toString(); }
+}
+
+class Sum extends VNClass {
+	constructor() {
+		super();
+		this.addends = [...arguments];
+		this.standardize();
+	}
+
+	standardize() {
+		for (let i in this.addends) {
+			if (this.addends[i] instanceof VNClass && !(this.addends[i] instanceof Atom))
+				this.addends[i].standardize();
+			if (this.addends[i] instanceof Sum) {
+				this.addends[i] = this.addends[i].addends;
+				this.addends = this.addends.flat();
+			}
+			if (this.addends[i] instanceof Atom) this.addends[i] = this.addends[i].value;
+		}
+
+		while (this.terms >= 2 && typeof this.addends[this.terms - 1] == "number" && typeof this.addends[this.terms - 2] == "number")
+			this.addends[this.terms - 2] += this.addends.pop();
+
+		if (this.addends.length == 1 && typeof this.addends[0] == "number") {
+			this.value = this.addends[0];
+			delete this.addends;
+			this.setType(Atom);
+		}
+
+		for (let i = 0; i < this.terms - 1; i++) {
+			if (typeof this.addends[i] == "number") { this.addends.splice(i--, 1); continue; }
+			if (this.addends[i].cmp(this.addends[i + 1]) == -1) {
+				if (this.addends[i] instanceof Product) {
+					if (this.addends[i + 1] instanceof Product) {
+						if (this.addends[i].ord.cmp(this.addends[i + 1].ord) == 0) continue;
+						this.addends.splice(i--, 1); continue;
+					}
+					if (this.addends[i].ord.cmp(this.addends[i + 1]) == 0) continue;
+					this.addends.splice(i--, 1); continue;
+				}
+				if (this.addends[i + 1] instanceof Product) {
+					if (this.addends[i].cmp(this.addends[i + 1].ord) == 0) continue;
+					this.addends.splice(i--, 1); continue;
+				}
+				if (this.addends[i].cmp(this.addends[i + 1]) == 0) continue;
+				this.addends.splice(i--, 1); continue;
+			}
+		}
+
+		for (let i = 0; i < this.terms - 1; i++) {
+			if (this.addends[i].cmp(this.addends[i + 1]) == 0) {
+				this.addends[i + 1] = new Product(this.addends[i + 1], 2);
+				this.addends.splice(i--, 1); continue;
+			}
+			if (this.addends[i] instanceof Product) {
+				if (this.addends[i + 1] instanceof Product) {
+					if (this.addends[i].ord.cmp(this.addends[i + 1].ord) == 0) {
+						this.addends[i + 1] = new Product(this.addends[i + 1].ord, this.addends[i].mult + this.addends[i + 1].mult);
+						this.addends.splice(i--, 1);
+					}
+					continue;
+				}
+				if (this.addends[i].ord.cmp(this.addends[i + 1]) == 0) {
+					this.addends[i + 1] = new Product(this.addends[i + 1], this.addends[i].mult + 1);
+					this.addends.splice(i--, 1);
+				}
+				continue;
+			}
+			if (this.addends[i + 1] instanceof Product) {
+				if (this.addends[i].cmp(this.addends[i + 1].ord) == 0) {
+					this.addends[i + 1] = new Product(this.addends[i + 1].ord, 1 + this.addends[i + 1].mult);
+					this.addends.splice(i--, 1);
+				}
+			}
+		}
+
+		if (this.terms == 1) {
+			let e = this.addends[0];
+			delete this.addends;
+			for (let i in e) this[i] = e[i];
+			this.setType(e.__proto__.constructor);
+		}
+	}
+
+	cmp(other) {
+		if (typeof other == "number" || other instanceof Atom) return 1;
+		if (other instanceof Product || other instanceof Phi) return this.addends[0].cmp(other) == -1 ? -1 : 1;
+		for (let i = 0; i < Math.min(this.terms, other.terms); i++) {
+			if (typeof this.addends[i] == "number") {
+				if (typeof other.addends[i] == "number") return this.addends[i] > other.addends[i] ? 1 : this.addends[i] < other.addends[i] ? -1 : 0;
+				return -1;
+			}
+			if (typeof other.addends[i] == "number") return 1;
+			let c = this.addends[i].cmp(other.addends[i]);
+			if (c !== 0) return c;
+		}
+		if (this.terms > other.terms) return 1;
+		if (this.terms < other.terms) return -1;
+		return 0;
+	}
+
+	mul(other) {
+		if (other == 1 || other.value == 1) return this.clone();
+		if (other == 0 || other.value == 0) return new Atom(0);
+		if (typeof other == "number") other = new Atom(other);
+		if (other instanceof Sum) return new Sum(...other.addends.map(e => this.mul(e)));
+		if (!(other instanceof Atom)) return this.addends[0].mul(other);
+		let t = this.addends[0];
+		if (typeof t == "number") t = new Atom(t);
+		return new Sum(t.mul(other), ...this.addends.slice(1));
+	}
+
+	pow(other) {
+		if (other instanceof Sum) {
+			let p = new Atom(1);
+			for (let i of other.addends) p = p.mul(this.pow(i));
+			return p;
+		}
+		if (other instanceof Product) return this.pow(other.ord).pow(other.mult);
+		if (other == 1 || other.value == 1) return this.clone();
+		if (other == 0 || other.value == 0) return new Atom(1);
+		if (typeof other == "number") other = new Atom(other);
+		if (other instanceof Atom) {
+			if (other.value > VNClass.MAX_TERMS - 1) throw "Too many terms, reduce exponent";
+			let t = this.clone();
+			for (let i = 0; i < other.value - 1; i++) t = t.mul(this);
+			return t;
+		}
+		let t = this.addends[0];
+		if (typeof t == "number") t = new Atom(t);
+		return t.pow(other);
+	}
+
+	get terms() { return this.addends.length; }
+	toString() { return this.addends.join("+"); }
+	toMixed() { return this.addends.map(e => { if (typeof e == "number") e = new Atom(e); return e.toMixed(); }).join("+"); }
+	toHTML() { return this.addends.map(e => { if (typeof e == "number") e = new Atom(e); return e.toHTML(); }).join("+"); }
+	[Symbol.iterator]() { return this.addends[Symbol.iterator](); }
+}
+
+class Product extends VNClass {
+	constructor(ord, mult) {
+		super();
+		this.ord = ord;
+		this.mult = mult;
+		this.standardize();
+	}
+
+	standardize() {
+		if (this.ord instanceof Atom) this.ord = this.ord.value;
+		if (this.mult instanceof Atom) this.mult = this.mult.value;
+		if (typeof this.ord == "number") {
+			this.value = this.ord * this.mult;
+			delete this.ord; delete this.mult;
+			this.setType(Atom);
+		}
+		if (this.mult == 0) {
+			this.value = 0;
+			delete this.ord; delete this.mult;
+			this.setType(Atom);
+		}
+		if (this.mult == 1) {
+			let o = this.ord;
+			delete this.ord; delete this.mult;
+			for (let i in o) this[i] = o[i];
+			this.setType(o.__proto__.constructor);
+		}
+		if (this.ord instanceof Product) {
+			this.mult = this.mult * this.ord.mult;
+			this.ord = this.ord.ord;
+		}
+	}
+
+	cmp(other) {
+		if (typeof other == "number" || other instanceof Atom) return 1;
+		if (other instanceof Sum) return -other.cmp(this);
+		if (other instanceof Phi) return this.ord.cmp(other) == -1 ? -1 : 1;
+		let oc = this.ord.cmp(other.ord);
+		if (oc !== 0) return oc;
+		return this.mult > other.mult ? 1 : this.mult < other.mult ? -1 : 0;
+	}
+
+	mul(other) {
+		if (other == 1 || other.value == 1) return this.clone();
+		if (other == 0 || other.value == 0) return new Atom(0);
+		if (other instanceof Atom) other = other.value;
+		if (other instanceof Sum) return new Sum(...other.addends.map(e => this.mul(e)));
+		if (typeof other == "number") return new Product(this.ord.mul(other), this.mult);
+		return this.ord.mul(other);
+	}
+
+	pow(other) {
+		if (other instanceof Sum) {
+			let p = new Atom(1);
+			for (let i of other.addends) p = p.mul(this.pow(i));
+			return p;
+		}
+		if (other instanceof Product) return this.pow(other.ord).pow(other.mult);
+		if (other == 1 || other.value == 1) return this.clone();
+		if (other == 0 || other.value == 0) return new Atom(1);
+		if (typeof other == "number") other = new Atom(other);
+		if (other instanceof Atom) return new Product(this.ord.pow(other), this.mult);
+		return this.ord.pow(other);
+	}
+
+	toString() { return "(" + this.ord.toString() + ")*" + this.mult.toString(); }
+	toMixed() { return "(" + this.ord.toMixed() + ")*" + this.mult.toString(); }
+	toHTML() { return "(" + this.ord.toHTML() + ")·" + this.mult.toString(); }
+}
+
+class Phi extends VNClass {
+	constructor() {
+		super();
+		this.args = [...arguments];
+		this.standardize();
+	}
+
+	static noStandard() {
+		let t = new Phi();
+		t.args = [...arguments];
+		t.standardize(true);
+		return t;
+	}
+
+	standardize(ns = false) {
+		for (let i in this.args)
+			if (this.args[i] instanceof Atom) this.args[i] = this.args[i].value;
+
+		if (!ns) {
+			while (this.args[0] == 0 && this.args.length > 1) this.args.shift();
+			if (this.args[0] == 0) {
+				this.value = 1;
+				delete this.args;
+				this.setType(Atom);
+			}
+			for (let i in this.args) {
+				if (!(this.args[i] instanceof Phi)) continue;
+				let a = [...this.args];
+				a[i] = "_";
+				if (this.args[i].isFixedPoint(a)) this.args = this.args[i].args;
+			}
+			for (let i in this.args)
+				if (this.args[i] instanceof VNClass && !(this.args[i] instanceof Atom))
+					this.args[i].standardize();
+		}
+	}
+
+	cmp(other) {
+		if (typeof other == "number" || other instanceof Atom) return 1;
+		if (other instanceof Sum || other instanceof Product) return -other.cmp(this);
+		let sumthis = new Sum(...this.args);
+		let sumother = new Sum(...other.args);
+		if (sumthis.cmp(other) == 1 || ((sumother instanceof Atom || sumother.cmp(this) == -1) && this.lexcmp(other) == 1)) return 1;
+		if (sumother.cmp(this) == 1 || ((sumthis instanceof Atom || sumthis.cmp(other) == -1) && other.lexcmp(this) == 1)) return -1;
+		return 0;
+	}
+
+	isFixedPoint(a) {
+		let index = a.indexOf("_");
+		for (let i = index + 1; i < a.length; i++) if (a[i] !== 0) return false;
+		if (a.length > this.args.length) return false;
+		if (this.args.length > a.length) return true;
+		for (let i in a) {
+			if (a[i] == "_") break;
+			let cmp;
+			if (this.args[i] instanceof VNClass) {
+				cmp = this.args[i].cmp(a[i] instanceof VNClass ? a[i] : new Atom(a[i]));
+			} else {
+				if (a[i] instanceof VNClass) {
+					cmp = -a[i].cmp(this.args[i] instanceof VNClass ? this.args[i] : new Atom(this.args[i]));
+				} else cmp = this.args[i] > a[i] ? 1 : this.args[i] < a[i] ? -1 : 0;
+			}
+			if (cmp == -1) return false;
+			if (cmp == 1) return true;
+		}
+		return false;
+	}
+
+	lexcmp(other) {
+		if (this.args.length > other.args.length) return 1;
+		if (this.args.length < other.args.length) return -1;
+		for (let i = 0; i < this.args.length; i++) {
+			if (typeof this.args[i] == "number") {
+				if (typeof other.args[i] == "number") {
+					if (this.args[i] == other.args[i]) continue;
+					return this.args[i] > other.args[i] ? 1 : this.args[i] < other.args[i] ? -1 : 0;
+				}
+				return -1;
+			}
+			if (typeof other.args[i] == "number") return 1;
+			let c = this.args[i].cmp(other.args[i]);
+			if (c !== 0) return c;
+		}
+		return 0;
+	}
+
+	mul(other) {
+		if (other == 1 || other.value == 1) return this.clone();
+		if (other == 0 || other.value == 0) return new Atom(0);
+		if (other instanceof Atom) other = other.value;
+		if (typeof other == "number") return new Product(new Phi(...this.args), other);
+		if (other instanceof Sum) return new Sum(...other.addends.map(e => this.mul(e)));
+		if (other instanceof Product) return new Product(this.mul(other.ord), other.mult);
+		let t = this.clone();
+		if (this.args.length > 1) t = Phi.noStandard(this);
+		if (other.args.length > 1) other = Phi.noStandard(other);
+		if (typeof t.args[0] == "number") t.args[0] = new Atom(t.args[0]);
+		if (typeof other.args[0] == "number") other.args[0] = new Atom(other.args[0]);
+		return new Phi(t.args[0].add(other.args[0]));
+	}
+
+	pow(other) {
+		if (other instanceof Sum) {
+			let p = new Atom(1);
+			for (let i of other.addends) p = p.mul(this.pow(i));
+			return p;
+		}
+		if (other instanceof Product) return this.pow(other.ord).pow(other.mult);
+		if (other == 1 || other.value == 1) return this.clone();
+		if (other == 0 || other.value == 0) return new Atom(1);
+		if (other instanceof Atom) other = other.value;
+		let t = this.clone();
+		if (this.args.length > 1) t = Phi.noStandard(this.clone());
+		if (typeof t.args[0] == "number") t.args[0] = new Atom(t.args[0]);
+		t.args[0] = t.args[0].mul(other);
+		t.standardize();
+		return t;
+	}
+
+	toString() { return "phi(" + this.args.join(",") + ")"; }
+
+	toMixed() {
+		let t = this.clone();
+		for (let i in t.args) if (typeof t.args[i] == "number") t.args[i] = new Atom(t.args[i]);
+		if (t.args.length == 1) {
+			if (t.args[0] == 1) return "ω";
+			return `ω^(${t.args[0].toMixed()})`;
+		}
+		if (t.args.length == 2 && t.args[0] == 1) return `ε_(${t.args[1].toMixed()})`;
+		if (t.args.length == 2 && t.args[0] == 2) return `ζ_(${t.args[1].toMixed()})`;
+		if (t.args.length == 2 && t.args[0] == 3) return `η_(${t.args[1].toMixed()})`;
+		if (t.args.length == 3 && t.args[0] == 1 && t.args[1] == 0) return `Γ_(${t.args[2].toMixed()})`;
+		return "φ(" + t.args.map(e => e?.toMixed()) + ")";
+	}
+
+	toHTML() {
+		let t = this.clone();
+		for (let i in t.args) if (typeof t.args[i] == "number") t.args[i] = new Atom(t.args[i]);
+		if (t.args.length == 1) {
+			if (t.args[0] == 1) return "ω";
+			let s = t.args[0].toHTML();
+			return `ω<sup>${s}</sup>`;
+		}
+		if (t.args.length == 2 && t.args[0] == 1) return `ε<sub>${t.args[1].toHTML()}</sub>`;
+		if (t.args.length == 2 && t.args[0] == 2) return `ζ<sub>${t.args[1].toHTML()}</sub>`;
+		if (t.args.length == 2 && t.args[0] == 3) return `η<sub>${t.args[1].toHTML()}</sub>`;
+		if (t.args.length == 3 && t.args[0] == 1 && t.args[1] == 0) return `Γ<sub>${t.args[2].toHTML()}</sub>`;
+		return "φ(" + t.args.map(e => e?.toHTML()) + ")";
+	}
+
+	[Symbol.iterator]() { return this.args[Symbol.iterator](); }
+}
+    </script>
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a24;
+            --text-primary: #e8e6e3;
+            --text-secondary: #9a9a9a;
+            --accent: #7eb8da;
+            --accent-dim: #4a7a96;
+            --node-fill: #e8e6e3;
+            --edge-stroke: #6a6a7a;
+            --grid-line: #1f1f2a;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Crimson Pro', Georgia, serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid var(--grid-line);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 400;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        h1 span {
+            color: var(--accent);
+            font-style: italic;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            font-style: italic;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 2rem;
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid var(--grid-line);
+        }
+
+        .card h3 {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+            font-weight: 400;
+        }
+
+        .input-group {
+            margin-bottom: 1rem;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.4rem;
+        }
+
+        .input-group input, .input-group textarea {
+            width: 100%;
+            background: var(--bg-secondary);
+            border: 1px solid var(--grid-line);
+            border-radius: 6px;
+            padding: 0.7rem 1rem;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            transition: border-color 0.2s;
+        }
+
+        .input-group input:focus, .input-group textarea:focus {
+            outline: none;
+            border-color: var(--accent-dim);
+        }
+
+        .input-group textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .presets {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .preset-btn {
+            background: var(--bg-secondary);
+            border: 1px solid var(--grid-line);
+            border-radius: 6px;
+            padding: 0.5rem 0.8rem;
+            color: var(--text-primary);
+            font-family: 'Crimson Pro', serif;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .preset-btn:hover {
+            border-color: var(--accent-dim);
+            background: var(--bg-card);
+        }
+
+        .preset-btn.active {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn-primary {
+            width: 100%;
+            background: linear-gradient(135deg, var(--accent-dim), var(--accent));
+            border: none;
+            border-radius: 8px;
+            padding: 0.9rem 1.5rem;
+            color: var(--bg-primary);
+            font-family: 'Crimson Pro', serif;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 20px rgba(126, 184, 218, 0.3);
+        }
+
+        .canvas-container {
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--grid-line);
+            overflow: hidden;
+            position: relative;
+            min-height: 500px;
+        }
+
+        #treeCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .info-text {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            font-style: italic;
+            margin-top: 0.5rem;
+        }
+
+        .syntax-help {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            background: var(--bg-secondary);
+            padding: 0.8rem;
+            border-radius: 6px;
+            margin-top: 0.5rem;
+        }
+
+        .syntax-help code {
+            color: var(--accent);
+        }
+
+        .ordinal-label {
+            font-family: 'Crimson Pro', serif;
+            font-style: italic;
+        }
+
+        .ordinal-display {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(transparent, rgba(26, 26, 36, 0.95) 30%);
+            padding: 2rem 1.5rem 1.5rem;
+            font-family: 'Crimson Pro', serif;
+        }
+
+        .ordinal-display:empty {
+            display: none;
+        }
+
+        .ordinal-display .label {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .ordinal-display .value {
+            font-size: 1.4rem;
+            color: var(--accent);
+            font-style: italic;
+            word-break: break-all;
+        }
+
+        .ordinal-display .value sup {
+            font-size: 0.7em;
+            vertical-align: super;
+        }
+
+        .ordinal-display .value sub {
+            font-size: 0.7em;
+            vertical-align: sub;
+        }
+
+        .multi-ordinals {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+        }
+
+        .multi-ordinals .ordinal-item {
+            flex: 1;
+            min-width: 120px;
+            text-align: center;
+        }
+
+        .multi-ordinals .ordinal-item .tree-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.3rem;
+        }
+
+        .multi-ordinals .ordinal-item .value {
+            font-size: 1.2rem;
+        }
+
+        @media (max-width: 900px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            .canvas-container {
+                min-height: 400px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>树序数编码 · <span>Tree Ordinal Encoding</span></h1>
+            <p class="subtitle">将有限树编码为序数，基于多元 Veblen 函数</p>
+        </header>
+
+        <div class="main-content">
+            <aside class="sidebar">
+                <div class="card">
+                    <h3>输入树</h3>
+                    <div class="input-group">
+                        <label>括号序列（逗号分隔多棵树）</label>
+                        <textarea id="treeInput" placeholder="例: (()())，((()))">(()())</textarea>
+                    </div>
+                    <div class="syntax-help">
+                        <code>()</code> = 叶节点 → 0<br>
+                        <code>(())</code> = 单子节点 → 1<br>
+                        <code>(()())</code> = 两个叶子 → ω<br>
+                        <code>(()()())</code> = 三个叶子 → ε₀
+                    </div>
+                    <button class="btn-primary" onclick="renderFromInput()" style="margin-top: 1rem;">绘制</button>
+                </div>
+
+                <div class="card">
+                    <h3>参数调整</h3>
+                    <div class="input-group">
+                        <label>节点间距 (padding)</label>
+                        <input type="number" id="paddingInput" value="40" min="20" max="100" step="5">
+                    </div>
+                    <div class="input-group">
+                        <label>层高度</label>
+                        <input type="number" id="levelHeightInput" value="60" min="30" max="120" step="5">
+                    </div>
+                    <div class="input-group">
+                        <label>节点半径</label>
+                        <input type="number" id="nodeRadiusInput" value="8" min="4" max="16" step="1">
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>编码规则</h3>
+                    <div class="syntax-help" style="font-family: 'Crimson Pro', serif; font-size: 0.9rem;">
+                        <p style="margin-bottom: 0.5rem;"><b>tφ</b><sub>n</sub>(a₀, ..., aₙ₋₁):</p>
+                        <p>n=0: 0</p>
+                        <p>n=1: 1 + a₀</p>
+                        <p>n=2: κ·(s+a) 或 a+κ</p>
+                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-left: 0.5rem;">κ=ω<sup>ω<sup>b</sup></sup>, s=1或2</p>
+                        <p>n=3: φ(1+b, a) 或 φ(c, b, a)</p>
+                        <p>n≥4: φ(1+aₙ₋₁, ..., a₀)</p>
+                    </div>
+                </div>
+            </aside>
+
+            <main class="canvas-container">
+                <canvas id="treeCanvas"></canvas>
+                <div class="ordinal-display" id="ordinalDisplay"></div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // 序数计算：树到序数的编码
+        // ============================================
+
+        function tphi(args) {
+            const n = args.length;
+            
+            if (n === 0) {
+                return new Atom(0);
+            }
+            
+            if (n === 1) {
+                // tphi_1(a) = 1 + a（注意：1+a 对极限序数会被吸收）
+                return new Atom(1).add(args[0]);
+            }
+            
+            if (n === 2) {
+                // tphi_2(a, b) = ψ(a, b)
+                // 根据修正后的公式：
+                // κ = ω^(ω^b)
+                // s = 1 如果 κ > b，s = 2 如果 κ = b（右参数临界，b 是 ε-数）
+                // 候选值 t = κ · (s + a)
+                // 如果 t > a，则 ψ(a,b) = t
+                // 如果 t = a（左参数临界，乘法吸收），则 ψ(a,b) = a + κ
+                
+                const a = args[0];
+                const b = args[1];
+                
+                // 计算 κ = ω^(ω^b)
+                let kappa;
+                if ((b instanceof Atom && b.value === 0) || b === 0) {
+                    // ω^(ω^0) = ω^1 = ω
+                    kappa = new Phi(1);
+                } else {
+                    // ω^(ω^b)
+                    const omegaToB = new Phi(b);
+                    kappa = new Phi(omegaToB);
+                }
+                
+                // 检查右参数临界：κ = b？
+                // 这发生在 b 是 ε-数时，即 ω^b = b，从而 ω^(ω^b) = ω^b = b
+                const rightCritical = kappa.cmp(b) === 0;
+                const s = rightCritical ? 2 : 1;
+                
+                // 计算 s + a（序数加法，左加常数）
+                const sPlusA = new Atom(s).add(a);
+                
+                // 计算候选值 t = κ · (s + a)
+                const t = kappa.mul(sPlusA);
+                
+                // 检查左参数临界：t = a？（乘法吸收）
+                const leftCritical = t.cmp(a) === 0;
+                
+                if (leftCritical) {
+                    // 左参数临界修正：ψ(a,b) = a + κ
+                    return a.add(kappa);
+                } else {
+                    // 正常情况：ψ(a,b) = t
+                    return t;
+                }
+            }
+            
+            if (n === 3) {
+                // tphi_3(a, b, c) = phi(1+b, a) if c=0, phi(c, b, a) if c>0
+                const a = args[0], b = args[1], c = args[2];
+                const cIsZero = (c instanceof Atom && c.value === 0) || c === 0;
+                
+                if (cIsZero) {
+                    return new Phi(new Atom(1).add(b), a);
+                } else {
+                    return new Phi(c, b, a);
+                }
+            }
+            
+            // n >= 4: tphi_n(a_0, ..., a_{n-1}) = phi(1 + a_{n-1}, a_{n-2}, ..., a_0)
+            const reversed = [...args].reverse();
+            reversed[0] = new Atom(1).add(reversed[0]);
+            return new Phi(...reversed);
+        }
+
+        function computeTreeOrdinal(tree) {
+            // 递归计算子树的序数
+            const childOrdinals = tree.children.map(child => computeTreeOrdinal(child));
+            return tphi(childOrdinals);
+        }
+
+        function formatOrdinal(ord) {
+            // 使用 VebleNum 的 toHTML 方法
+            if (ord.toHTML) {
+                return ord.toHTML();
+            }
+            return ord.toString();
+        }
+
+        // ============================================
+        // 序数树布局算法实现
+        // ============================================
+
+        class OrdinalTree {
+            constructor(children = []) {
+                this.children = children;
+                this.xpos = 0;
+                this.offset = 0;
+            }
+
+            static leaf() {
+                return new OrdinalTree([]);
+            }
+
+            static node(...children) {
+                return new OrdinalTree(children);
+            }
+
+            hasSubtree() {
+                return this.children.length > 0;
+            }
+        }
+
+        class TreeLayoutEngine {
+            constructor(padding = 40) {
+                this.padding = padding;
+                this.xpos = [];       // 记录每一行当前访问到的最后位置
+                this.xpos_offset = [0]; // 轮廓偏移的差分数组
+            }
+
+            reserve(arr, index, defaultValue) {
+                while (arr.length <= index) {
+                    arr.push(defaultValue);
+                }
+            }
+
+            layout(tree, depth = 0) {
+                this.reserve(this.xpos, depth, -this.padding);
+                this.reserve(this.xpos_offset, depth + 1, 0);
+
+                // 计算真实轮廓位置
+                this.xpos[depth] += this.xpos_offset[depth];
+
+                // 下推 offset 标记
+                this.xpos_offset[depth + 1] += this.xpos_offset[depth];
+                this.xpos_offset[depth] = 0;
+
+                if (!tree.hasSubtree()) {
+                    // 叶节点
+                    tree.xpos = this.xpos[depth] + this.padding;
+                    this.xpos[depth] = tree.xpos;
+                    return { xpos: tree.xpos, maxDepth: depth };
+                } else {
+                    // 内部节点
+                    let smin = Infinity, smax = -Infinity;
+                    let maxChildDepth = 0;
+
+                    for (const child of tree.children) {
+                        const result = this.layout(child, depth + 1);
+                        smin = Math.min(smin, result.xpos);
+                        smax = Math.max(smax, result.xpos);
+                        maxChildDepth = Math.max(maxChildDepth, result.maxDepth);
+                    }
+
+                    let cpos = (smin + smax) / 2; // 子节点中心
+                    let tpos = this.xpos[depth] + this.padding; // 当前层最小可用位置
+
+                    tree.offset = 0;
+                    if (cpos < tpos) {
+                        const delta = tpos - cpos;
+                        this.xpos_offset[maxChildDepth + 1] -= delta;
+                        this.xpos_offset[depth + 1] += delta;
+                        tree.offset = delta;
+                    }
+
+                    tree.xpos = cpos;
+                    this.xpos[depth] = tree.xpos + tree.offset;
+                    return { xpos: tree.xpos + tree.offset, maxDepth: maxChildDepth };
+                }
+            }
+
+            adjust(tree, totalOffset = 0) {
+                totalOffset += tree.offset;
+                tree.xpos += totalOffset;
+
+                for (const child of tree.children) {
+                    this.adjust(child, totalOffset);
+                }
+            }
+
+            computeLayout(tree) {
+                this.xpos = [];
+                this.xpos_offset = [0];
+                this.layout(tree, 0);
+                this.adjust(tree, 0);
+                return tree;
+            }
+        }
+
+        // ============================================
+        // 渲染器
+        // ============================================
+
+        class TreeRenderer {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.nodeRadius = 8;
+                this.levelHeight = 60;
+                this.padding = 40;
+            }
+
+            resize() {
+                const container = this.canvas.parentElement;
+                const dpr = window.devicePixelRatio || 1;
+                const rect = container.getBoundingClientRect();
+                
+                this.canvas.width = rect.width * dpr;
+                this.canvas.height = rect.height * dpr;
+                this.canvas.style.width = rect.width + 'px';
+                this.canvas.style.height = rect.height + 'px';
+                
+                this.ctx.scale(dpr, dpr);
+                this.width = rect.width;
+                this.height = rect.height;
+            }
+
+            clear() {
+                this.ctx.fillStyle = '#1a1a24';
+                this.ctx.fillRect(0, 0, this.width, this.height);
+            }
+
+            getTreeBounds(tree, depth = 0, bounds = { minX: Infinity, maxX: -Infinity, maxDepth: 0 }) {
+                bounds.minX = Math.min(bounds.minX, tree.xpos);
+                bounds.maxX = Math.max(bounds.maxX, tree.xpos);
+                bounds.maxDepth = Math.max(bounds.maxDepth, depth);
+
+                for (const child of tree.children) {
+                    this.getTreeBounds(child, depth + 1, bounds);
+                }
+                return bounds;
+            }
+
+            drawTree(tree, offsetX, offsetY, depth = 0) {
+                const x = tree.xpos + offsetX;
+                const y = offsetY + depth * this.levelHeight;
+
+                // 绘制到子节点的边
+                for (const child of tree.children) {
+                    const childX = child.xpos + offsetX;
+                    const childY = offsetY + (depth + 1) * this.levelHeight;
+
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(x, y);
+                    this.ctx.lineTo(childX, childY);
+                    this.ctx.strokeStyle = '#6a6a7a';
+                    this.ctx.lineWidth = 1.5;
+                    this.ctx.stroke();
+                }
+
+                // 绘制节点
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, this.nodeRadius, 0, Math.PI * 2);
+                this.ctx.fillStyle = '#e8e6e3';
+                this.ctx.fill();
+
+                // 递归绘制子节点
+                for (const child of tree.children) {
+                    this.drawTree(child, offsetX, offsetY, depth + 1);
+                }
+            }
+
+            drawLabel(text, x, y) {
+                this.ctx.font = 'italic 18px "Crimson Pro", Georgia, serif';
+                this.ctx.fillStyle = '#9a9a9a';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(text, x, y);
+            }
+
+            renderMultipleTrees(treesWithLabels, showOrdinals = true) {
+                this.resize();
+                this.clear();
+
+                // 布局所有树
+                const layoutEngine = new TreeLayoutEngine(this.padding);
+                const layoutData = [];
+
+                for (const { tree, label } of treesWithLabels) {
+                    const engine = new TreeLayoutEngine(this.padding);
+                    engine.computeLayout(tree);
+                    const bounds = this.getTreeBounds(tree);
+                    const ordinal = computeTreeOrdinal(tree);
+                    layoutData.push({ tree, label, bounds, ordinal });
+                }
+
+                // 计算总宽度和布局
+                const spacing = 60;
+                let totalWidth = 0;
+                let maxDepth = 0;
+
+                for (const data of layoutData) {
+                    const treeWidth = data.bounds.maxX - data.bounds.minX;
+                    data.width = Math.max(treeWidth + this.padding * 2, 80);
+                    totalWidth += data.width;
+                    maxDepth = Math.max(maxDepth, data.bounds.maxDepth);
+                }
+                totalWidth += spacing * (layoutData.length - 1);
+
+                // 计算起始位置以居中
+                let startX = (this.width - totalWidth) / 2;
+                const startY = 60;
+
+                // 绘制每棵树
+                for (const data of layoutData) {
+                    const offsetX = startX - data.bounds.minX + data.width / 2 - (data.bounds.maxX - data.bounds.minX) / 2;
+                    const offsetY = startY + (maxDepth - data.bounds.maxDepth) * this.levelHeight;
+
+                    this.drawTree(data.tree, offsetX, offsetY);
+
+                    // 绘制标签
+                    const labelX = startX + data.width / 2;
+                    const labelY = startY + (maxDepth + 1) * this.levelHeight + 30;
+                    this.drawLabel(data.label, labelX, labelY);
+
+                    startX += data.width + spacing;
+                }
+
+                // 显示序数
+                if (showOrdinals) {
+                    const display = document.getElementById('ordinalDisplay');
+                    display.innerHTML = `
+                        <div class="label">序数表示</div>
+                        <div class="multi-ordinals">
+                            ${layoutData.map(d => `
+                                <div class="ordinal-item">
+                                    <div class="tree-label">${d.label || '树'}</div>
+                                    <div class="value">${formatOrdinal(d.ordinal)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                }
+            }
+
+            renderSingleTree(tree, label = '', showOrdinal = true) {
+                this.resize();
+                this.clear();
+
+                const engine = new TreeLayoutEngine(this.padding);
+                engine.computeLayout(tree);
+
+                const bounds = this.getTreeBounds(tree);
+                const treeWidth = bounds.maxX - bounds.minX;
+                const treeHeight = (bounds.maxDepth + 1) * this.levelHeight;
+
+                const offsetX = (this.width - treeWidth) / 2 - bounds.minX;
+                const offsetY = Math.max(60, (this.height - treeHeight - 120) / 2);
+
+                this.drawTree(tree, offsetX, offsetY);
+
+                if (label) {
+                    this.drawLabel(label, this.width / 2, offsetY + treeHeight + 40);
+                }
+
+                // 计算并显示序数
+                if (showOrdinal) {
+                    const ordinal = computeTreeOrdinal(tree);
+                    const display = document.getElementById('ordinalDisplay');
+                    display.innerHTML = `
+                        <div class="label">序数表示</div>
+                        <div class="value">${formatOrdinal(ordinal)}</div>
+                    `;
+                }
+            }
+        }
+
+        // ============================================
+        // UI 交互
+        // ============================================
+
+        const canvas = document.getElementById('treeCanvas');
+        const renderer = new TreeRenderer(canvas);
+
+        function updateParams() {
+            renderer.padding = parseInt(document.getElementById('paddingInput').value) || 40;
+            renderer.levelHeight = parseInt(document.getElementById('levelHeightInput').value) || 60;
+            renderer.nodeRadius = parseInt(document.getElementById('nodeRadiusInput').value) || 8;
+        }
+
+        function parseTreeFromParens(str) {
+            let pos = 0;
+            
+            function parse() {
+                if (pos >= str.length || str[pos] !== '(') {
+                    throw new Error(`期望 '(' 在位置 ${pos}`);
+                }
+                pos++; // 跳过 '('
+                
+                const children = [];
+                while (pos < str.length && str[pos] !== ')') {
+                    if (str[pos] === '(') {
+                        children.push(parse());
+                    } else if (/\s/.test(str[pos])) {
+                        pos++; // 跳过空白
+                    } else {
+                        throw new Error(`意外字符 '${str[pos]}' 在位置 ${pos}`);
+                    }
+                }
+                
+                if (pos >= str.length || str[pos] !== ')') {
+                    throw new Error(`期望 ')' 在位置 ${pos}`);
+                }
+                pos++; // 跳过 ')'
+                
+                return new OrdinalTree(children);
+            }
+            
+            const tree = parse();
+            // 跳过尾部空白
+            while (pos < str.length && /\s/.test(str[pos])) pos++;
+            if (pos < str.length) {
+                throw new Error(`意外内容在位置 ${pos}`);
+            }
+            return tree;
+        }
+
+        function parseMultipleTrees(input) {
+            // 按逗号分隔，但要考虑括号内的逗号不分隔
+            const trees = [];
+            let depth = 0;
+            let current = '';
+            
+            for (const char of input) {
+                if (char === '(') {
+                    depth++;
+                    current += char;
+                } else if (char === ')') {
+                    depth--;
+                    current += char;
+                } else if ((char === ',' || char === '，') && depth === 0) {
+                    // 顶层逗号，分隔树
+                    if (current.trim()) {
+                        trees.push(current.trim());
+                    }
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            
+            if (current.trim()) {
+                trees.push(current.trim());
+            }
+            
+            return trees.map(s => parseTreeFromParens(s));
+        }
+
+        let currentTrees = [];
+
+        function renderFromInput() {
+            updateParams();
+            const input = document.getElementById('treeInput').value.trim();
+            
+            if (!input) {
+                alert('请输入树结构');
+                return;
+            }
+
+            try {
+                const trees = parseMultipleTrees(input);
+                currentTrees = trees;
+                
+                if (trees.length === 1) {
+                    renderer.renderSingleTree(trees[0]);
+                } else {
+                    renderer.renderMultipleTrees(trees.map((tree, i) => ({
+                        tree,
+                        label: `树${i + 1}`
+                    })));
+                }
+            } catch (e) {
+                alert('解析错误: ' + e.message);
+            }
+        }
+
+        // 事件绑定
+        document.querySelectorAll('#paddingInput, #levelHeightInput, #nodeRadiusInput').forEach(input => {
+            input.addEventListener('change', () => {
+                if (currentTrees.length > 0) {
+                    renderFromInput();
+                }
+            });
+        });
+
+        window.addEventListener('resize', () => {
+            if (currentTrees.length > 0) {
+                renderFromInput();
+            }
+        });
+
+        // 初始渲染
+        renderFromInput();
+    </script>
+</body>
+</html>
